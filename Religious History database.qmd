@@ -1,0 +1,239 @@
+---
+title: "Many questions about questions in The Database of Religious History"
+---
+
+## Quarto
+
+
+
+```{r}
+#| code-fold: true
+#| code-summary: "Setting Up"
+library(ggplot2)
+library(tidyverse)
+library(plotly)
+library(patchwork)
+library(RColorBrewer)
+answers <- read.csv("answerset.csv")
+entity_tags <- read.csv("entity_tags.csv")
+
+```
+
+
+
+
+```{r}
+#| code-fold: true
+#| code-summary: "Cleaning questions"
+answers <- answers |>
+  filter(entry_id %in% entity_tags$entry_id) |>
+  select(question_id, question_name, answer, answer_value, entry_id) |>
+  filter(!str_detect(question_name, "sources|Sources")) |> # deleting questions about sources
+  filter(!answer_value == -1) |> # deleting "field doesn't know" answers
+  filter(str_detect(answer, "Yes|No")) # deleting multiple choice questions
+
+```
+
+
+# Questions
+
+```{r}
+#| code-fold: true
+#| code-summary: "Calculating StDv, Variance and Entropy"
+
+calculate_entropy <- function(x) { #ngl, it's taken directly from StackOverflow
+  p <- table(x) / length(x)
+  -sum(p * log2(p), na.rm = TRUE)
+}
+
+difference_summary_by_question <- answers |>
+  group_by(question_id) |>
+  summarise(sd = sd(answer_value, na.rm = TRUE), 
+            var = var(answer_value, na.rm = TRUE),
+            entropy = calculate_entropy(answer_value),
+            count = n(),
+            .groups = "drop") |>
+  mutate_all(~replace(., is.na(.), 0))
+
+```
+
+
+```{r}
+sd_var_plot <- difference_summary_by_question |>
+  arrange(var, count) |>
+  ungroup() |>
+  mutate(row_num = row_number()) |> 
+  pivot_longer(cols = c(var, sd, entropy), names_to = "measure", values_to = "value") |>
+  ggplot(aes(x = row_num, y = value, fill = measure)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Comparison of Variability Measures (Variance, StdDev, Entropy)",
+       x = "Question Number", y = "Value", fill = "Measure") +
+  theme_minimal() +
+  coord_flip() +
+  scale_fill_brewer(palette = "Paired")
+
+sd_var_plot
+```
+
+```{r}
+var_plot <- ggplot(difference_summary_by_question, aes(x = count, y = var)) +
+  geom_point(aes(color = question_id), size = 1) +
+  labs(title = "Variance vs Answer Count for Each Question",
+       x = "Answer Count", y = "Variance") +
+  theme_minimal() +
+  theme(legend.position = "none") 
+entropy_plot <- ggplot(difference_summary_by_question, aes(x = count, y = entropy)) +
+  geom_point(aes(color = question_id), size = 1) +
+  labs(title = "Entropy vs Answer Count for Each Question",
+       x = "Answer Count", y = "Entropy") +
+  theme_minimal() +
+  theme(legend.position = "none") 
+
+var_plot + entropy_plot + plot_layout(widths = c(2, 1), heights = unit(c(5, 1), c('cm', 'null')))
+```
+
+```{r}
+difference_summary_by_question |>
+  filter(count == 1) |>
+  nrow()
+difference_summary_by_question |>
+  filter(var <= 0.1 & count >= 100) |>
+  nrow()
+difference_summary_by_question |>
+  filter(var <= 0.27 & var >= 0.22 & count >= 100) |>
+  nrow()
+```
+
+```{r}
+#| code-fold: true
+#| code-summary: "Extract less relevan questions"
+irrelevant_questions <- difference_summary_by_question |>
+  filter(count >= 100 & var <= 0.1) |>
+  mutate(irrelevancy_measure = count / var) |>
+  arrange(desc(irrelevancy_measure)) |>
+  head(15) |>
+  inner_join(answers, by = "question_id") |>
+  group_by(question_id, question_name, var, count) |>
+  summarise(mean_answer = mean(answer_value), .groups = "drop") |>
+  mutate(var = round(var, 2), mean_answer = round(mean_answer, 2)) 
+
+irrelevant_questions |>
+  select(-question_id)
+```
+```{r}
+#| code-fold: true
+#| code-summary: "Extract more relevant questions"
+relevant_questions <- difference_summary_by_question |>
+  filter(count >= 100 & var <= 0.27 & var >= 0.22) |>
+  arrange(desc(count)) |>
+  head(15) |>
+  inner_join(answers, by = "question_id") |>
+  group_by(question_id, question_name, var, count) |>
+  summarise(mean_answer = mean(answer_value), .groups = "drop") |>
+  mutate(var = round(var, 2), mean_answer = round(mean_answer, 2)) 
+
+relevant_questions |>
+  select(-question_id)
+```
+
+
+
+#Labels 
+```{r}
+df_barplot_labels <- entity_tags |>
+  filter(entrytag_level == 2) |>
+  filter(str_detect(entrytag_path, "Group"))|>
+  select(entry_id, entrytag_name) |> 
+  group_by(entrytag_name) |>
+  summarise(entries_per_label = n()) |>
+  mutate(binned_entries = cut(entries_per_label,
+                            breaks = c(0, 1, 5, 20, 50, 100, Inf),
+                            labels = c("1", "2-5", "6-20", "21-50", "51-100", "100+"),
+                            right = TRUE)) 
+
+label_plot <- ggplot(df_barplot_labels, aes(x = binned_entries, fill = binned_entries)) +
+  geom_bar() +
+  coord_flip() +
+  labs(title = "How many times one label is used?",
+       x = "Number of uses",
+       y = "Number of labels") +
+  guides(fill="none") +
+  scale_fill_brewer(palette = "Dark2", direction = -1) +
+  theme_minimal()
+
+df_barplot_entities <- entity_tags |>
+  filter(entrytag_level == 2) |>
+  filter(str_detect(entrytag_path, "Group"))|>
+  select(entry_id, entrytag_name) |> 
+  group_by(entry_id) |>
+  summarise(labels_per_entry = n()) |>
+  mutate(binned_labels = cut(labels_per_entry,
+                            breaks = c(0, 1, 2, 3, 4, 5, Inf),
+                            labels = c("1", "2", "3", "4", "5", "6+"),
+                            right = TRUE)) 
+entity_plot <- ggplot(df_barplot_entities, aes(x = binned_labels, fill = binned_labels)) +
+  geom_bar() +
+  coord_flip() +
+  labs(title = "How many labels one entry has?",
+       x = "Number of labels per entry",
+       y = "Number of entries") +
+  guides(fill="none") +
+  scale_fill_brewer(palette = "Dark2", direction = -1) +
+  theme_minimal()
+
+label_plot + entity_plot + plot_layout(widths = c(1, 1), heights = unit(c(5, 1), c('cm', 'null')))
+```
+
+
+
+```{r}
+merged_data <- entity_tags |>
+  filter(entrytag_level == 2) |>
+  filter(str_detect(entrytag_path, "Group"))|>
+  select(entry_id, entrytag_name) |>
+  inner_join(df_barplot_entities, by = "entry_id", relationship = "many-to-many") |>
+  inner_join(df_barplot_labels, by = "entrytag_name", relationship = "many-to-many") |>
+  group_by(entrytag_name) |>
+  summarise(entries_per_label = mean(entries_per_label), 
+            avg_labels_per_entry = mean(labels_per_entry))
+
+p1 <- ggplot(merged_data, aes(x = entries_per_label, y = avg_labels_per_entry, color = entrytag_name)) +
+  geom_point() +
+  labs(x = "Entries per label",
+       y = "Average labels per entry") +
+  guides(color="none")  +
+  theme_minimal() 
+            
+            
+ggplotly(p1)
+```
+
+
+
+
+
+```{r}
+overlap_heatmap <- entity_tags |>
+  filter(entrytag_level == 2) |>
+  filter(str_detect(entrytag_path, "Group"))|>
+  select(entry_id, entrytag_name) |> 
+  distinct(entry_id, entrytag_name) |>
+  mutate(value = 1) |>
+  pivot_wider(names_from = entrytag_name, values_from = value, values_fill = 0) |>
+  mutate(row_sum = rowSums(pick(where(is.numeric),-entry_id))) |>
+  arrange(desc(row_sum))|>
+  slice_head(n = 100) |>
+  select(where(~ sum(. > 0) > 8)) |>
+  select(-row_sum) |>
+  pivot_longer(cols = -entry_id, names_to = "entrytag_name", values_to = "value") |>
+  mutate(entry_id = factor(entry_id)) |>
+  ggplot(aes(x = entry_id, y = entrytag_name, fill = value)) +
+  geom_tile(color = "white") +  
+  theme_minimal() + 
+  scale_fill_gradient(low = "white", high = "#a871a5") +
+  labs(title = "Heatmap of the IDs with most overlapping labels", x = "Question ID", y = "Label") +
+  theme(axis.text.y = element_text(hjust = 1, size = 7)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 3))  
+  
+ overlap_heatmap
+```
