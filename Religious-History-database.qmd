@@ -1,0 +1,309 @@
+---
+title: "Many questions about questions in The Database of Religious History"
+theme: cosmo
+---
+
+## Introduction
+|  In the field of religious studies most researchers come from humanities backgrounds – anthropology, philology, and history, but methods of social sciences such as sociology and psychology are still prevalent. Questionnaires and statistics are no doubt a useful tool, when they are used in the proper way, but can be an obstacle when they are designed poorly. In this short essay I wanted to explore if the database claiming itself to be “the world’s first comprehensive online quantitative and qualitative encyclopedia of religious cultural history”[^1]  is something that should make its way into every researcher of religion toolkit or is it a failed attempt at comparative method.     
+
+|   This exploration started taking its shape as I grew more and more frustrated with my attempts to work with the data provided in this database. My idea was to compare religious groups labeled as “Shamanism” with different traditions to see if they differ in any substantial way. When I looked through questionnaires provided questions seemed really non-specific and I was curious if there are any points that would make it visually clear that shamanism is much divorced from realities of, let’s say, Christianity. 
+The two main problems arose: 
+    
+*    labeling of religious groups was of differing generality. Particular labels on the same levels overlapped greatly and there was so much of them, that hand picking them arbitrarily would be counterproductive
+*    the data is not evenly distributed. Some questions got hundreds of answers, while others had only one. Every label (like “Abrahamic”, “Vedic Traditions”, “A Hybrid of Popular Beliefs” or “Vaiṣṇava Traditions”) ranged in amount of entries and questions answered.
+
+|   After some time I managed to clear the database from questions about sources from which an expert took their answers and sparse multiple choice questions that only made life harder, I managed to pick 150 questions to which at least 75% of shamanistic groups answered. When I plotted them against multiple different groups, the only thing that was instantaneously noticeable was vertical stripes. 
+| 
+
+![Commented graph from first data exploration](commented_graph.jpg){fig-align="left"}
+
+| It got me really curious: are those questions really saying anything important about differences and similarities of those traditions? There are 3681 of them, which by itself seems excessive. 
+| 
+| 
+| 
+```{r setup}
+#| code-fold: true
+#| code-summary: "Setting Up"
+#| warning: false
+library(ggplot2)
+library(tidyverse)
+library(plotly)
+library(patchwork)
+library(RColorBrewer)
+answers <- read.csv("answerset.csv")
+entity_tags <- read.csv("entity_tags.csv")
+
+```
+
+
+## Questions
+|   The Database of Religious History contains data from questionnaires filled by experts about particular religious group, text or place. Most of them allow for binary yes-no answers, few are multiple answer questions, and some require adding text in comment to the question, such as questions about sources/bibliography that experts are using to give those answers, that got lumped together with everything else. For the purpose of this article, only yes-no questions were included in the analysis. 
+| 
+|  
+
+```{r data cleaning}
+#| code-fold: true
+#| code-summary: "Cleaning up the questions"
+answers <- answers |>
+  filter(entry_id %in% entity_tags$entry_id) |>
+  select(question_id, question_name, answer, answer_value, entry_id) |>
+  filter(!str_detect(question_name, "sources|Sources")) |> # deleting questions about sources
+  filter(!answer_value == -1) |> # deleting "field doesn't know" answers
+  filter(str_detect(answer, "Yes|No")) # deleting multiple choice questions
+
+```
+
+
+
+```{r stdv and var calcularions}
+#| code-fold: true
+#| code-summary: "Calculating StDv and Variance"
+
+
+difference_summary_by_question <- answers |>
+  group_by(question_id) |>
+  summarise(sd = sd(answer_value, na.rm = TRUE), 
+            var = var(answer_value, na.rm = TRUE),
+            count = n(),
+            .groups = "drop") |>
+  mutate_all(~replace(., is.na(.), 0))
+
+```
+
+```{r fig 1}
+#| code-fold: true
+#| code-summary: "Plotting Fig. 1"
+sd_var_plot <- difference_summary_by_question |>
+  arrange(var, count) |>
+  ungroup() |>
+  mutate(row_num = row_number()) |> 
+  pivot_longer(cols = c(var, sd), names_to = "measure", values_to = "value") |>
+  ggplot(aes(x = row_num, y = value, fill = measure)) +
+  geom_bar(stat = "identity", position = "dodge") +
+  labs(title = "Comparison of Variability Measures (Variance, StdDev)",
+       x = "Question Number", y = "Value", fill = "Measure") +
+  theme_minimal() +
+  coord_flip() +
+  scale_fill_brewer(palette = "Paired")
+
+sd_var_plot
+```
+
+|   While plotting the variance and standard deviation of each question it quickly became obvious that there were more than 500 questions which had absolutely zero variance. As we can see in the graph above – the lower part of y axis remains empty. To investigate the problem further, the next plot contains variance and the number of answers to each question.
+| 
+| 
+| 
+
+
+```{r fig 2}
+#| code-fold: true
+#| code-summary: "Plotting Fig. 2"
+var_plot <- ggplot(difference_summary_by_question, aes(x = count, y = var)) +
+  geom_point(aes(color = question_id), size = 1) +
+  labs(title = "Variance vs Answer Count for Each Question",
+       x = "Answer Count", y = "Variance") +
+  theme_minimal() +
+  theme(legend.position = "none") 
+
+var_plot 
+```
+|   While some of low variance is explained away by questions with almost no answers (which is a problem in itself) another alarming trend is now visible. Some portion of questions, including those carrying the most responses, fall below 0.1 variance. 
+|   With maximum variance of 0.5 (when answers are evenly divided), variance values around 0.25 would indicate actual differences between responding groups being highlighted. Value of 0.1 signals to us that almost every group answers in the same way.
+| 
+| 
+| 
+
+```{r}
+difference_summary_by_question |>
+  filter(count == 1) |>
+  nrow()
+difference_summary_by_question |>
+  filter(var <= 0.1 & count >= 100) |>
+  nrow()
+difference_summary_by_question |>
+  filter(var <= 0.27 & var >= 0.22 & count >= 100) |>
+  nrow()
+```
+|   Quick filtering allows us to see that there 466 questions with only one response, 190 of the questions with 100 responses have low variance and 360 seem to fall into the “sweet spot” of variance around 0.25. Extracting some of the “irrelevant” questions with a large number of responses shows us a twofold nature of such a phenomenon. Portion of them refers to very extreme practices such as cannibalism and castration. Another part, where answers are almost always “yes”, asks about extremely common characteristics of religious beliefs: “Can supreme god reward?” or “Does the supreme god have knowledge of the world?”.
+|  
+| 
+| 
+  
+```{r}
+#| code-fold: true
+#| code-summary: "Extracting less relevant questions"
+irrelevant_questions <- difference_summary_by_question |>
+  filter(count >= 100 & var <= 0.1) |>
+  mutate(irrelevancy_measure = count / var) |>
+  arrange(desc(irrelevancy_measure)) |>
+  head(15) |>
+  inner_join(answers, by = "question_id") |>
+  group_by(question_id, question_name, var, count) |>
+  summarise(mean_answer = mean(answer_value), .groups = "drop") |>
+  mutate(var = round(var, 2), mean_answer = round(mean_answer, 2)) 
+
+irrelevant_questions |>
+  select(-question_id)
+```
+|   This begs the question of the purpose of such data. If it is intended as a way to compare religious groups between each other those questions become irrelevant and redundant. If it is meant to check if one particular group has practiced cannibalism or lacks the idea of supreme god the yes-no answer is lacking context and subtlety required in treatment of such topics.  
+|   Below are included the questions that actually differentiate the responses and can serve as ground for comparison. 
+| 
+| 
+| 
+
+
+```{r}
+#| code-fold: true
+#| code-summary: "Extracting more relevant questions"
+relevant_questions <- difference_summary_by_question |>
+  filter(count >= 100 & var <= 0.27 & var >= 0.22) |>
+  arrange(desc(count)) |>
+  head(15) |>
+  inner_join(answers, by = "question_id") |>
+  group_by(question_id, question_name, var, count) |>
+  summarise(mean_answer = mean(answer_value), .groups = "drop") |>
+  mutate(var = round(var, 2), mean_answer = round(mean_answer, 2)) 
+
+relevant_questions |>
+  select(-question_id)
+```
+
+
+## Labels 
+|   Another obstacle encountered in this database is the labelling of religious groups. At first glance it would seem easy – there are levels of generality assigned to different labels. They overlap, but we could assume that one entry can be both, for example, Greek religion and pagan religion. 
+|   Looking at the graph below, where the most overlapping labels at level 2 are plotted, we see that it's not the case. There is “Christian”, “Christianity”, “Early Christianity”, “Christian Tradition” as well as “Abrahamic” and “Catholic” – all on the same level. The entries seem to be assigned to them at random, e.g. one of them is **Christian but not Abrahamic** and the other is **Catholic but not Christian**.
+| 
+|  
+|  
+
+
+```{r fig 3}
+#| code-fold: true
+#| code-summary: "Plotting Fig. 3"
+overlap_heatmap <- entity_tags |>
+  filter(entrytag_level == 2) |>
+  filter(str_detect(entrytag_path, "Group"))|>
+  select(entry_id, entrytag_name) |> 
+  distinct(entry_id, entrytag_name) |>
+  mutate(value = 1) |>
+  pivot_wider(names_from = entrytag_name, values_from = value, values_fill = 0) |>
+  mutate(row_sum = rowSums(pick(where(is.numeric),-entry_id))) |>
+  arrange(desc(row_sum))|>
+  slice_head(n = 100) |>
+  select(where(~ sum(. > 0) > 8)) |>
+  select(-row_sum) |>
+  pivot_longer(cols = -entry_id, names_to = "entrytag_name", values_to = "value") |>
+  mutate(entry_id = factor(entry_id)) |>
+  ggplot(aes(x = entry_id, y = entrytag_name, fill = value)) +
+  geom_tile(color = "#e6c5e4") +  
+  theme_minimal() + 
+  scale_fill_gradient(low = "white", high = "#a871a5") +
+  labs(title = "Heatmap of the IDs with the most overlapping labels", x = "Question ID", y = "Label") +
+  theme(axis.text.y = element_text(hjust = 1, size = 7)) +
+  theme(axis.text.x = element_text(angle = 90, hjust = 1, size = 3))  
+  
+ overlap_heatmap
+```
+
+|	Comparison between number of entries per label and number of labels placed on one entry is highlighting this issue. It is clearly noticeable that those labels vary greatly in level of generality, making it very difficult to work with this data.
+|   There is no way of actually comparing different religious groups without picking them out manually or repeating the same data multiple times, as some of the entries have as many as nineteen labels. 
+| 
+| 
+| 
+
+
+```{r fig 4,5}
+#| code-fold: true
+#| code-summary: "Plotting Fig. 4, 5"
+df_barplot_labels <- entity_tags |>
+  filter(entrytag_level == 2) |>
+  filter(str_detect(entrytag_path, "Group"))|>
+  select(entry_id, entrytag_name) |> 
+  group_by(entrytag_name) |>
+  summarise(entries_per_label = n()) |>
+  mutate(binned_entries = cut(entries_per_label,
+                            breaks = c(0, 1, 5, 20, 50, 100, Inf),
+                            labels = c("1", "2-5", "6-20", "21-50", "51-100", "100+"),
+                            right = TRUE)) 
+
+label_plot <- ggplot(df_barplot_labels, aes(x = binned_entries, fill = binned_entries)) +
+  geom_bar() +
+  coord_flip() +
+  labs(title = "How many times one label is used?",
+       x = "Number of uses",
+       y = "Number of labels") +
+  guides(fill="none") +
+  scale_fill_brewer(palette = "Dark2", direction = -1) +
+  theme_minimal()
+
+df_barplot_entities <- entity_tags |>
+  filter(entrytag_level == 2) |>
+  filter(str_detect(entrytag_path, "Group"))|>
+  select(entry_id, entrytag_name) |> 
+  group_by(entry_id) |>
+  summarise(labels_per_entry = n()) |>
+  mutate(binned_labels = cut(labels_per_entry,
+                            breaks = c(0, 1, 2, 3, 4, 5, Inf),
+                            labels = c("1", "2", "3", "4", "5", "6+"),
+                            right = TRUE)) 
+entity_plot <- ggplot(df_barplot_entities, aes(x = binned_labels, fill = binned_labels)) +
+  geom_bar() +
+  coord_flip() +
+  labs(title = "How many labels one entry has?",
+       x = "Number of labels per entry",
+       y = "Number of entries") +
+  guides(fill="none") +
+  scale_fill_brewer(palette = "Dark2", direction = -1) +
+  theme_minimal()
+
+label_plot + entity_plot + plot_layout(widths = c(1, 1), heights = unit(c(4, 1), c('cm', 'null')))
+```
+|   On the last graph there are clear outliers: very specific groups with multiple labels that occur only one or twice. It would be hard to argue that they are on the same level of generality as umbrella term like *abrahamic religion*, covering a wide range of Jewish, Muslim and Christian traditions.
+| 
+| 
+
+
+```{r fig 6}
+#| code-fold: true
+#| code-summary: "Plotting Fig. 6"
+merged_data <- entity_tags |>
+  filter(entrytag_level == 2) |>
+  filter(str_detect(entrytag_path, "Group"))|>
+  select(entry_id, entrytag_name) |>
+  inner_join(df_barplot_entities, by = "entry_id", relationship = "many-to-many") |>
+  inner_join(df_barplot_labels, by = "entrytag_name", relationship = "many-to-many") |>
+  group_by(entrytag_name) |>
+  summarise(entries_per_label = mean(entries_per_label), 
+            avg_labels_per_entry = mean(labels_per_entry))
+
+p1 <- ggplot(merged_data, aes(x = entries_per_label, y = avg_labels_per_entry, color = entrytag_name)) +
+  geom_point() +
+  labs(x = "Entries per label",
+       y = "Average labels per entry") +
+  guides(color="none")  +
+  theme_minimal() 
+            
+            
+ggplotly(p1)
+```
+
+
+
+
+
+
+## Discussion
+|	While problems found in the Database of Religious History could be brushed off as just a design issue, easily fixable by competent data engineer, they actually connect with wider discourse around comparative methods in study of religion.
+|	  In her article What’s Beyond the Post Holdrege points at shortcomings of the past of religious studies. Scholars such as Mircea Eliade and Gerardus van der Leeuw made three primary mistakes: not paying enough attention to differences, not paying attention to diachronic dimension and not paying enough attention to context[^2]. In other words there was a tendency of leaning into similarities and constructing grand theories of universal human tendencies that later got deconstructed by authors like J. Z. Smith[^3].
+|	It seems like The Database of Religious History is facing difficulties of similar nature. While trying to serve as grounds for comparison of different religious groups it falls short in doing so. With a significant number of questions answered only by one or two responders and hundreds of them with very low variance it seems not to be a tool for looking for correlations or big scale patterns (other than the fact that usually people think that cannibalism is bad). At the same time visiting this database with the intention of finding out if Tibetan Buddhism has messianic beliefs present seems to be very counterproductive. One could find only a yes-no answer with no additional context or explanation. It would be much better to grab an introductory handbook of this subject and search for the information there. 
+|   It is extremely hard to use this database in a meaningful way, especially considering the fact that students on faculties of religious studies are trained in data analysis and digging through it proved a time consuming task. Yet still, the methodological issues and the unspoken assumption about religion and comparativism are at the heart of the problem of the Database of Religious History. Such shortcomings can and will discourage students and scholars of religion from pursuing research using quantitative tools. In the author's opinion there should be much more conversation between both the theoreticians of the field and experts in data collection and analysis to ensure higher standards of research in predominantly qualitative areas of academic study.
+
+
+
+
+
+[^1]: Home page of Database of Religious History, <https://religiondatabase.org/landing> (access 28.01.25)
+[^2]: Holdrege, Barbara A.. WHAT'S BEYOND THE POST?: Comparative Analysis as Critical Method. A Magic Still Dwells: Comparative Religion in the Postmodern Age, University of California Press, 2000, pp. 77-91.
+[^3]: Smith J. Z., To Take Place. Toward Theory in Ritual, Chicago University Press 1987
+
+
